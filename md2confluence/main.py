@@ -1,0 +1,146 @@
+import sys
+import os
+import json
+import optparse
+import mistune
+import requests
+
+
+# Confluence macro to render a "Table of Contents".
+MACRO_TOC = """<ac:structured-macro ac:name="toc">
+<ac:parameter ac:name="printable">true</ac:parameter>
+<ac:parameter ac:name="style">disc</ac:parameter>
+<ac:parameter ac:name="maxLevel">5</ac:parameter>
+<ac:parameter ac:name="minLevel">1</ac:parameter>
+<ac:parameter ac:name="class">rm-contents</ac:parameter>
+<ac:parameter ac:name="exclude"></ac:parameter>
+<ac:parameter ac:name="type">list</ac:parameter>
+<ac:parameter ac:name="outline">false</ac:parameter>
+<ac:parameter ac:name="include"></ac:parameter>
+</ac:structured-macro>
+"""
+
+
+class ConfluenceRenderer(mistune.Renderer):
+    """A Markdown renderer that renders HTML compatible with Confluence "storage"
+    format.
+    """
+    def block_code(self, code, lang):
+        if not lang:
+            lang = 'none'
+
+        code_block = """<ac:structured-macro ac:name="code">
+<ac:parameter ac:name="language">%s</ac:parameter>
+<ac:plain-text-body><![CDATA[%s]]></ac:plain-text-body>
+</ac:structured-macro>
+""" % (lang, code)
+        return code_block
+
+
+class ConfluenceClientException(Exception):
+    pass
+
+
+class ConfluenceClient(object):
+    """A simple Confluence REST API client."""
+
+    def __init__(self, username, password, domain):
+        self.username = username
+        self.password = password
+        self.domain = domain
+        self.base_url = 'https://%s.atlassian.net/wiki/rest/api/content/' % self.domain
+        renderer = ConfluenceRenderer()
+        self.markdown = mistune.Markdown(renderer=renderer)
+
+    def update_page(self, filename, filename_meta):
+        meta = {}
+        with open(filename_meta) as fd:
+            for line in fd:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                key, value = line.split('=', 1)
+                meta[key.strip()] = value.strip()
+
+        page_id = meta['id']
+        page_title = meta['title']
+        page_space = meta['space']
+
+        response = requests.get(
+            '%s%s?expand=version,ancestors,body.storage' % (self.base_url, page_id),
+            auth=(self.username, self.password))
+        if response.status_code != 200:
+            raise ConfluenceClientException("Error reading page: %r" % response)
+
+        page_data = response.json()
+        version = page_data['version']['number']
+        # ancestor_id = page_data['ancestors'][0]['id']
+
+        with open(filename, 'r') as fd:
+            page_body_raw = fd.read()
+
+        page_body_html = MACRO_TOC + self.markdown(page_body_raw)
+
+        headers = {
+            'Content-Type': 'application/json'
+        }
+
+        payload = {
+            'id': page_id,
+            'type': 'page',
+            'title': page_title,
+            'space': {
+                'key': page_space,
+            },
+            'body': {
+                'storage': {
+                    'value': page_body_html,
+                    'representation': 'storage',
+                }
+            },
+            'version': {
+                'number': version + 1,
+            },
+            # 'ancestors': [
+            #     {
+            #         'type': 'page',
+            #         'id': ancestor_id,
+            #     },
+            # ],
+        }
+
+        print "Updating page..."
+        response = requests.put('%s%s' % (self.base_url, page_id), headers=headers,
+                                data=json.dumps(payload), auth=(self.username, self.password))
+        if response.status_code != 200:
+            raise ConfluenceClientException("Error updating page: %r" % response)
+
+        result = response.json()
+        new_version = result['version']['number']
+        print "Updated page, version %d" % new_version
+
+
+def main():
+    parser = optparse.OptionParser()
+    opts, args = parser.parse_args()
+
+    if len(args) < 1:
+        print "Argument missing: filename"
+        sys.exit(1)
+
+    filename = args[0]
+
+    username = os.getenv('JIRA_USERNAME')
+    password = os.getenv('JIRA_PASSWORD')
+    domain = os.getenv('JIRA_DOMAIN')
+
+    if not username or not password or not domain:
+        print "Please set JIRA_USERNAME, JIRA_PASSWORD and JIRA_DOMAIN."
+        sys.exit(1)
+
+    cli = ConfluenceClient(username, password, domain)
+    cli.update_page(filename, filename + '.meta')
+
+
+if __name__ == '__main__':
+    main()
