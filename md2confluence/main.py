@@ -21,6 +21,22 @@ MACRO_TOC = """<ac:structured-macro ac:name="toc">
 """
 
 
+# This message will appear on the top of each page created or updated with this script.
+EDIT_WARNING = """<strong>NOTE</strong>: this page is managed with md2confluence:
+any manual change to the contents of this page will be overwritten."""
+
+
+# Info/Note/Warning blocks
+MACRO_POPUP = """<p><ac:structured-macro ac:name="{type}"><ac:rich-text-body><p>
+{contents}
+</p></ac:rich-text-body></ac:structured-macro></p>"""
+
+
+def create_popup(text, style):
+    assert style in ('info', 'warning', 'note')
+    return MACRO_POPUP.format(type=style, contents=text)
+
+
 class ConfluenceRenderer(mistune.Renderer):
     """A Markdown renderer that renders HTML compatible with Confluence "storage"
     format.
@@ -74,12 +90,13 @@ class ConfluenceClient(object):
 
         page_data = response.json()
         version = page_data['version']['number']
-        # ancestor_id = page_data['ancestors'][0]['id']
 
         with open(filename, 'r') as fd:
             page_body_raw = fd.read()
 
-        page_body_html = MACRO_TOC + self.markdown(page_body_raw)
+        # assemble the page
+        warning_msg = create_popup(EDIT_WARNING, 'info')
+        page_body_html = MACRO_TOC + warning_msg + self.markdown(page_body_raw)
 
         headers = {
             'Content-Type': 'application/json'
@@ -101,15 +118,9 @@ class ConfluenceClient(object):
             'version': {
                 'number': version + 1,
             },
-            # 'ancestors': [
-            #     {
-            #         'type': 'page',
-            #         'id': ancestor_id,
-            #     },
-            # ],
         }
 
-        print "Updating page..."
+        print "Updating page \"%s\"..." % page_title
         response = requests.put('%s%s' % (self.base_url, page_id), headers=headers,
                                 data=json.dumps(payload), auth=(self.username, self.password))
         if response.status_code != 200:
@@ -117,7 +128,8 @@ class ConfluenceClient(object):
 
         result = response.json()
         new_version = result['version']['number']
-        print "Updated page, version %d" % new_version
+        link = result['_links']['base'] + result['_links']['webui']
+        print "Updated page, version %d: %s" % (new_version, link)
 
 
 def main():
