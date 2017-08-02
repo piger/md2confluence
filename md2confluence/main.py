@@ -1,3 +1,4 @@
+import re
 import sys
 import os
 import json
@@ -29,7 +30,8 @@ any manual change to the contents of this page will be overwritten."""
 # Info/Note/Warning blocks
 MACRO_POPUP = """<p><ac:structured-macro ac:name="{type}"><ac:rich-text-body><p>
 {contents}
-</p></ac:rich-text-body></ac:structured-macro></p>"""
+</p></ac:rich-text-body></ac:structured-macro></p>
+"""
 
 
 def create_popup(text, style):
@@ -53,6 +55,28 @@ class ConfluenceRenderer(mistune.Renderer):
         return code_block
 
 
+def extract_meta(text):
+    """Extract Meatdata headers from a Markdown document.
+
+    From: https://github.com/lepture/mistune-contrib/blob/master/mistune_contrib/meta.py
+    """
+    indentation_re = re.compile(r'\n\s{2,}')
+    meta_re = re.compile(r'^(\w+):\s*(.+?)\n')
+
+    rv = {}
+    m = meta_re.match(text)
+
+    while m:
+        key = m.group(1)
+        value = m.group(2)
+        value = indentation_re.sub('\n', value.strip())
+        rv[key] = value
+        text = text[len(m.group(0)):]
+        m = meta_re.match(text)
+
+    return rv, text
+
+
 class ConfluenceClientException(Exception):
     pass
 
@@ -68,15 +92,9 @@ class ConfluenceClient(object):
         renderer = ConfluenceRenderer()
         self.markdown = mistune.Markdown(renderer=renderer)
 
-    def update_page(self, filename, filename_meta):
-        meta = {}
-        with open(filename_meta) as fd:
-            for line in fd:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                key, value = line.split('=', 1)
-                meta[key.strip()] = value.strip()
+    def update_page(self, filename):
+        with open(filename) as fd:
+            meta, page_body_raw = extract_meta(fd.read())
 
         page_id = meta['id']
         page_title = meta['title']
@@ -90,9 +108,6 @@ class ConfluenceClient(object):
 
         page_data = response.json()
         version = page_data['version']['number']
-
-        with open(filename, 'r') as fd:
-            page_body_raw = fd.read()
 
         # assemble the page
         warning_msg = create_popup(EDIT_WARNING, 'info')
@@ -151,7 +166,7 @@ def main():
         sys.exit(1)
 
     cli = ConfluenceClient(username, password, domain)
-    cli.update_page(filename, filename + '.meta')
+    cli.update_page(filename)
 
 
 if __name__ == '__main__':
