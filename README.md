@@ -4,14 +4,16 @@ A script to import Markdown documents as Confluence wiki pages.
 
 ## Example usage
 
-For each page to import you have to create a metadata file; for example to import the document `notes.md`
-you need to create `notes.md.meta` having the contents:
+Each Markdown document that you want to import must have a *meta* header in the following format:
 
 ```
-id = confluence page id
-space = confluence space
-title = the title of your page
+id: confluence page id
+space: confluence space
+title: the title of your page
 ```
+
+This configure where the page will be uploaded to Confluence: the page ID of the page to overwrite, (for example the page at https://example.atlassian.net/wiki/pages/viewinfo.action?pageId=263915044 has the id `263915044`), the
+Confluence *Space* (for example: "ops") and the title.
 
 To configure authentication for jira you need to set three environment variables: `JIRA_USERNAME`,
 `JIRA_PASSWORD`, `JIRA_DOMAIN`.
