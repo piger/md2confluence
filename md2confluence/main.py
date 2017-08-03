@@ -34,7 +34,7 @@ MACRO_POPUP = """<p><ac:structured-macro ac:name="{type}"><ac:rich-text-body><p>
 """
 
 
-def create_popup(text, style):
+def create_popup(style, text):
     assert style in ('info', 'warning', 'note')
     return MACRO_POPUP.format(type=style, contents=text)
 
@@ -53,6 +53,56 @@ class ConfluenceRenderer(mistune.Renderer):
 </ac:structured-macro>
 """ % (lang, code)
         return code_block
+
+    def block_popup(self, style, text):
+        return create_popup(style, text)
+
+
+class PopupBlockGrammar(mistune.BlockGrammar):
+    block_popup = re.compile(r'^~([?!%])(.*?)\n', re.DOTALL)
+
+
+class PopupBlockLexer(mistune.BlockLexer):
+    """Support for "popups" in Markdown.
+
+    Popups are block level elements that renders as Info/Note/Warning blocks in Confluence; the syntax is
+    ~? for info popups, ~! for note and ~% for warnings.
+
+    Example:
+
+    ~?This is a INFO popup.
+    """
+    default_rules = ['block_popup'] + mistune.BlockLexer.default_rules
+
+    def __init__(self, rules=None, **kwargs):
+        if rules is None:
+            rules = PopupBlockGrammar()
+        super(PopupBlockLexer, self).__init__(rules, **kwargs)
+
+    def parse_block_popup(self, m):
+        style_symbol = m.group(1)
+        if style_symbol == '?':
+            style = 'info'
+        elif style_symbol == '!':
+            style = 'note'
+        else:
+            style = 'warning'
+
+        self.tokens.append({
+            'type': 'block_popup',
+            'style': style,
+            'text': m.group(2),
+        })
+
+
+class MarkdownWithPopup(mistune.Markdown):
+    def __init__(self, renderer, **kwargs):
+        if 'block' not in kwargs:
+            kwargs['block'] = PopupBlockLexer
+        super(MarkdownWithPopup, self).__init__(renderer, **kwargs)
+
+    def output_block_popup(self):
+        return self.renderer.block_popup(self.token['style'], self.token['text'])
 
 
 def extract_meta(text):
@@ -90,7 +140,7 @@ class ConfluenceClient(object):
         self.domain = domain
         self.base_url = 'https://%s.atlassian.net/wiki/rest/api/content/' % self.domain
         renderer = ConfluenceRenderer()
-        self.markdown = mistune.Markdown(renderer=renderer)
+        self.markdown = MarkdownWithPopup(renderer=renderer)
 
     def update_page(self, filename):
         with open(filename) as fd:
@@ -110,7 +160,7 @@ class ConfluenceClient(object):
         version = page_data['version']['number']
 
         # assemble the page
-        warning_msg = create_popup(EDIT_WARNING, 'info')
+        warning_msg = create_popup('info', EDIT_WARNING)
         page_body_html = MACRO_TOC + warning_msg + self.markdown(page_body_raw)
 
         headers = {
