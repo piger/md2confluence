@@ -220,7 +220,6 @@ class ConfluenceClient(object):
 
     def upload_attachment(self, page_id, filename, comment=None):
         mimetype, _ = mimetypes.guess_type(filename)
-        print "mimetype = %r" % mimetype
         basename = os.path.basename(filename)
 
         payload = {
