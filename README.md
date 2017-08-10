@@ -2,6 +2,14 @@
 
 A script to import Markdown documents as Confluence wiki pages.
 
+## Confluence syntax
+
+The amount of Confluence "Storage" syntax (**not markup!**)  supported is very limited and includes:
+
+- code blocks
+- image attachments
+- popups (i.e. popup-like blocks for warning, note or info messages)
+
 ## Example usage
 
 Each Markdown document that you want to import must have a *meta* header in the following format:
@@ -25,6 +33,16 @@ md2confluence notes.md
 ```
 
 to import your page into Confluence. Please note that at the moment you can only update already existsing pages.
+
+### Adding image attachments
+
+In your markdown document you can use the standard syntax for image links:
+
+``` markdown
+![project_logo](project_logo.png)
+```
+
+if `project_logo.png` exists in the current directory it will be uploaded alongside the page being updated.
 
 ## Useful documentation
 
