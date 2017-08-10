@@ -1,3 +1,4 @@
+import re
 import sys
 import os
 import json
@@ -53,6 +54,7 @@ class ConfluenceClient(object):
         # assemble the page
         warning_msg = create_popup('info', get_snippet('edit_warning'))
         page_body_html = get_snippet('toc') + warning_msg + self.markdown(page_body_raw)
+        attachments = self._extract_attachments(page_body_html)
 
         payload = {
             'id': page_id,
@@ -81,7 +83,15 @@ class ConfluenceClient(object):
         result = response.json()
         new_version = result['version']['number']
         link = result['_links']['base'] + result['_links']['webui']
-        print "Updated page %d \"%s\", version %d: %s" % (page_id, page_title, new_version, link)
+        print "Updated page %s \"%s\", version %d: %s" % (page_id, page_title, new_version, link)
+
+        if not attachments:
+            return
+
+        for attachment in attachments:
+            if os.path.exists(attachment):
+                print "Uploading attachment: \"%s\"" % attachment
+                self.upload_attachment(page_id, attachment)
 
     def upload_attachment(self, page_id, filename, comment=None):
         mimetype, _ = mimetypes.guess_type(filename)
@@ -120,6 +130,9 @@ class ConfluenceClient(object):
         if len(results):
             return results[0]
         return None
+
+    def _extract_attachments(self, page):
+        return re.findall(r'<ri:attachment ri:filename="([^"]+)" />', page)
 
 
 def main():
