@@ -3,6 +3,7 @@ import sys
 import os
 import json
 import optparse
+import mimetypes
 import mistune
 import requests
 
@@ -34,6 +35,19 @@ MACRO_POPUP = """<p><ac:structured-macro ac:name="{type}"><ac:rich-text-body><p>
 """
 
 
+# <img> (attachments)
+MACRO_IMAGE = """<ac:image>
+<ri:attachment ri:filename="%s" />
+</ac:image>
+"""
+
+
+# <img> (remote images)
+MACRO_IMAGE_REMOTE = """<ac:image>
+<ri:url ri:value="%s" /></ac:image>
+"""
+
+
 def create_popup(style, text):
     assert style in ('info', 'warning', 'note')
     return MACRO_POPUP.format(type=style, contents=text)
@@ -56,6 +70,13 @@ class ConfluenceRenderer(mistune.Renderer):
 
     def block_popup(self, style, text):
         return create_popup(style, text)
+
+    def image(self, src, title, text):
+        if src.startswith('http'):
+            rv = MACRO_IMAGE_REMOTE % src
+        else:
+            rv = MACRO_IMAGE % src
+        return rv
 
 
 class PopupBlockGrammar(mistune.BlockGrammar):
@@ -138,9 +159,15 @@ class ConfluenceClient(object):
         self.username = username
         self.password = password
         self.domain = domain
-        self.base_url = 'https://%s.atlassian.net/wiki/rest/api/content/' % self.domain
+        self.base_url = 'https://%s.atlassian.net' % self.domain
         renderer = ConfluenceRenderer()
         self.markdown = MarkdownWithPopup(renderer=renderer)
+
+        self.session = requests.Session()
+        self.session.auth = (self.username, self.password)
+        self.session.headers = {
+            'Content-Type': 'application/json'
+        }
 
     def update_page(self, filename):
         with open(filename) as fd:
@@ -150,9 +177,8 @@ class ConfluenceClient(object):
         page_title = meta['title']
         page_space = meta['space']
 
-        response = requests.get(
-            '%s%s?expand=version,ancestors,body.storage' % (self.base_url, page_id),
-            auth=(self.username, self.password))
+        response = self.session.get(
+            '%s/wiki/rest/api/content/%s?expand=version,ancestors,body.storage' % (self.base_url, page_id))
         if response.status_code != 200:
             raise ConfluenceClientException("Error reading page: %r" % response)
 
@@ -162,10 +188,6 @@ class ConfluenceClient(object):
         # assemble the page
         warning_msg = create_popup('info', EDIT_WARNING)
         page_body_html = MACRO_TOC + warning_msg + self.markdown(page_body_raw)
-
-        headers = {
-            'Content-Type': 'application/json'
-        }
 
         payload = {
             'id': page_id,
@@ -186,8 +208,8 @@ class ConfluenceClient(object):
         }
 
         print "Updating page \"%s\"..." % page_title
-        response = requests.put('%s%s' % (self.base_url, page_id), headers=headers,
-                                data=json.dumps(payload), auth=(self.username, self.password))
+        response = self.session.put('%s/wiki/rest/api/content/%s' % (self.base_url, page_id),
+                                    data=json.dumps(payload))
         if response.status_code != 200:
             raise ConfluenceClientException("Error updating page: %r" % response)
 
@@ -195,6 +217,45 @@ class ConfluenceClient(object):
         new_version = result['version']['number']
         link = result['_links']['base'] + result['_links']['webui']
         print "Updated page, version %d: %s" % (new_version, link)
+
+    def upload_attachment(self, page_id, filename, comment=None):
+        mimetype, _ = mimetypes.guess_type(filename)
+        print "mimetype = %r" % mimetype
+        basename = os.path.basename(filename)
+
+        payload = {
+            'comment': comment or '',
+            'file': (basename, open(filename, 'rb'), mimetype, { 'Expires': 0 }),
+        }
+
+        old_attachment = self.get_attachment(page_id, filename)
+        url = "%s/wiki/rest/api/content/%s/child/attachment/" % (self.base_url, page_id)
+        if old_attachment is not None:
+            url += "%s/data" % old_attachment['id']
+
+        response = self.session.post(url, files=payload, headers={
+            'X-Atlassian-Token': 'no-check',
+            # We must delete the "default" content-type of this class... (application/json)
+            'Content-Type': None,
+        })
+        if response.status_code != 200:
+            raise ConfluenceClientException(
+                "Error uploading attachment: %r (%r)" % (response, response.text))
+
+    def get_attachment(self, page_id, filename):
+        basename = os.path.basename(filename)
+        response = self.session.get("%s/wiki/rest/api/content/%s/child/attachment?filename=%s" % (
+            self.base_url, page_id, basename))
+        if response.status_code == 404:
+            return None
+        elif response.status_code != 200:
+            raise ConfluenceClientException("Error status code for `get_attachment`: %r" % response)
+
+        data = response.json()
+        results = data.get('results', [])
+        if len(results):
+            return results[0]
+        return None
 
 
 def main():

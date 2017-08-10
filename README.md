@@ -31,3 +31,4 @@ to import your page into Confluence. Please note that at the moment you can only
 - https://confluence.atlassian.com/doc/code-block-macro-139390.html
 - https://developer.atlassian.com/confdev/confluence-server-rest-api/confluence-rest-api-examples
 - https://confluence.atlassian.com/doc/confluence-wiki-markup-251003035.html
+- [Confluence storage format](https://confluence.atlassian.com/doc/confluence-storage-format-790796544.html)
