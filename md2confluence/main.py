@@ -4,53 +4,49 @@ import os
 import json
 import optparse
 import mimetypes
+import pkg_resources
 import mistune
 import requests
 
 
-# Confluence macro to render a "Table of Contents".
-MACRO_TOC = """<ac:structured-macro ac:name="toc">
-<ac:parameter ac:name="printable">true</ac:parameter>
-<ac:parameter ac:name="style">disc</ac:parameter>
-<ac:parameter ac:name="maxLevel">5</ac:parameter>
-<ac:parameter ac:name="minLevel">1</ac:parameter>
-<ac:parameter ac:name="class">rm-contents</ac:parameter>
-<ac:parameter ac:name="exclude"></ac:parameter>
-<ac:parameter ac:name="type">list</ac:parameter>
-<ac:parameter ac:name="outline">false</ac:parameter>
-<ac:parameter ac:name="include"></ac:parameter>
-</ac:structured-macro>
-"""
+SNIPPETS = {
+    # warning message to prepend to every page
+    'edit_warning': 'data/edit_warning.html',
+
+    # confluence macro for a Table of Contents
+    'toc': 'data/toc.xml',
+
+    # confluence macro for "popups"
+    # arg 'type': one of: info, note, warning.
+    # arg 'contents': popup text body
+    'popup': 'data/popup.xml',
+
+    # image (attachment)
+    # arg 'filename': filename of the attachment file
+    'image_attachment': 'data/image_attachment.xml',
+
+    # image (remote URL)
+    # arg 'url': url of the remote image
+    'image_url': 'data/image_remote.xml',
+
+    # code block
+    # arg 'lang': language (for syntax highlighting)
+    # arg 'contents': contents of the code snippet
+    'code': 'data/code.xml',
+}
 
 
-# This message will appear on the top of each page created or updated with this script.
-EDIT_WARNING = """<strong>NOTE</strong>: this page is managed with md2confluence:
-any manual change to the contents of this page will be overwritten."""
+def get_snippet(name):
+    """Render "XHTML" (or rather XML) blocks in Confluence "storage" syntax"""
 
-
-# Info/Note/Warning blocks
-MACRO_POPUP = """<p><ac:structured-macro ac:name="{type}"><ac:rich-text-body><p>
-{contents}
-</p></ac:rich-text-body></ac:structured-macro></p>
-"""
-
-
-# <img> (attachments)
-MACRO_IMAGE = """<ac:image>
-<ri:attachment ri:filename="%s" />
-</ac:image>
-"""
-
-
-# <img> (remote images)
-MACRO_IMAGE_REMOTE = """<ac:image>
-<ri:url ri:value="%s" /></ac:image>
-"""
+    return pkg_resources.resource_string('md2confluence', SNIPPETS[name])
 
 
 def create_popup(style, text):
+    """Create a block popup"""
+
     assert style in ('info', 'warning', 'note')
-    return MACRO_POPUP.format(type=style, contents=text)
+    return get_snippet('popup').format(type=style, contents=text)
 
 
 class ConfluenceRenderer(mistune.Renderer):
@@ -60,22 +56,16 @@ class ConfluenceRenderer(mistune.Renderer):
     def block_code(self, code, lang):
         if not lang:
             lang = 'none'
-
-        code_block = """<ac:structured-macro ac:name="code">
-<ac:parameter ac:name="language">%s</ac:parameter>
-<ac:plain-text-body><![CDATA[%s]]></ac:plain-text-body>
-</ac:structured-macro>
-""" % (lang, code)
-        return code_block
+        return get_snippet('code').format(lang=lang, contents=code)
 
     def block_popup(self, style, text):
         return create_popup(style, text)
 
     def image(self, src, title, text):
         if src.startswith('http'):
-            rv = MACRO_IMAGE_REMOTE % src
+            rv = get_snippet('image_url').format(url=src)
         else:
-            rv = MACRO_IMAGE % src
+            rv = get_snippet('image_attachment').format(filename=src)
         return rv
 
 
@@ -152,6 +142,12 @@ class ConfluenceClientException(Exception):
     pass
 
 
+class APIError(ConfluenceClientException):
+    def __init__(self, msg, response):
+        super(APIError, self).__init__(msg)
+        self.response = response
+
+
 class ConfluenceClient(object):
     """A simple Confluence REST API client."""
 
@@ -177,17 +173,18 @@ class ConfluenceClient(object):
         page_title = meta['title']
         page_space = meta['space']
 
-        response = self.session.get(
-            '%s/wiki/rest/api/content/%s?expand=version,ancestors,body.storage' % (self.base_url, page_id))
+        response = self.session.get("%s/wiki/rest/api/content/%s"
+                                    "?expand=version,ancestors,body.storage" % (
+                                        self.base_url, page_id))
         if response.status_code != 200:
-            raise ConfluenceClientException("Error reading page: %r" % response)
+            raise APIError("Error reading page %s" % page_id, response)
 
         page_data = response.json()
         version = page_data['version']['number']
 
         # assemble the page
-        warning_msg = create_popup('info', EDIT_WARNING)
-        page_body_html = MACRO_TOC + warning_msg + self.markdown(page_body_raw)
+        warning_msg = create_popup('info', get_snippet('edit_warning'))
+        page_body_html = get_snippet('toc') + warning_msg + self.markdown(page_body_raw)
 
         payload = {
             'id': page_id,
@@ -211,12 +208,12 @@ class ConfluenceClient(object):
         response = self.session.put('%s/wiki/rest/api/content/%s' % (self.base_url, page_id),
                                     data=json.dumps(payload))
         if response.status_code != 200:
-            raise ConfluenceClientException("Error updating page: %r" % response)
+            raise APIError("Error updating page: %s" % page_id, response)
 
         result = response.json()
         new_version = result['version']['number']
         link = result['_links']['base'] + result['_links']['webui']
-        print "Updated page, version %d: %s" % (new_version, link)
+        print "Updated page %d \"%s\", version %d: %s" % (page_id, page_title, new_version, link)
 
     def upload_attachment(self, page_id, filename, comment=None):
         mimetype, _ = mimetypes.guess_type(filename)
@@ -224,7 +221,7 @@ class ConfluenceClient(object):
 
         payload = {
             'comment': comment or '',
-            'file': (basename, open(filename, 'rb'), mimetype, { 'Expires': 0 }),
+            'file': (basename, open(filename, 'rb'), mimetype, {'Expires': 0}),
         }
 
         old_attachment = self.get_attachment(page_id, filename)
@@ -234,12 +231,12 @@ class ConfluenceClient(object):
 
         response = self.session.post(url, files=payload, headers={
             'X-Atlassian-Token': 'no-check',
-            # We must delete the "default" content-type of this class... (application/json)
+            # Here we must let requests set the correct content type for a file upload, instead of
+            # using our default "application/json"
             'Content-Type': None,
         })
         if response.status_code != 200:
-            raise ConfluenceClientException(
-                "Error uploading attachment: %r (%r)" % (response, response.text))
+            raise APIError("Error uploading attachment: %s" % filename, response)
 
     def get_attachment(self, page_id, filename):
         basename = os.path.basename(filename)
@@ -248,7 +245,7 @@ class ConfluenceClient(object):
         if response.status_code == 404:
             return None
         elif response.status_code != 200:
-            raise ConfluenceClientException("Error status code for `get_attachment`: %r" % response)
+            raise APIError("Error getting attachment: %s" % filename, response)
 
         data = response.json()
         results = data.get('results', [])
@@ -276,7 +273,11 @@ def main():
         sys.exit(1)
 
     cli = ConfluenceClient(username, password, domain)
-    cli.update_page(filename)
+    try:
+        cli.update_page(filename)
+    except APIError as ex:
+        print "API Error: %s" % ex
+        print "HTTP %d: %s" % (ex.response.status_code, ex.response.text)
 
 
 if __name__ == '__main__':
