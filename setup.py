@@ -10,7 +10,7 @@ setup(
     url="https://github.com/piger/md2confluence",
     install_requires=[
         'mistune==0.7.4',
-        'requests==2.18.3',
+        'requests==2.20.0',
     ],
     include_package_data=True,
     packages=find_packages(),
