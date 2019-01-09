@@ -9,8 +9,8 @@ setup(
     author_email="daniel@spatof.org",
     url="https://github.com/piger/md2confluence",
     install_requires=[
-        'mistune==0.7.4',
-        'requests==2.20.0',
+        'mistune==0.8.4',
+        'requests==2.21.0',
     ],
     include_package_data=True,
     packages=find_packages(),
